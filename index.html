@@ -42,7 +42,7 @@ a{color:var(--ac);font-weight:600;text-decoration:none;margin-right:12px}
 <div class="card">
   <strong>1. Chave da API Gemini (Google)</strong>
   <input id="key" type="password" placeholder="AIza..." autocomplete="off">
-  <label class="note">Modelo<input id="model" value="gemini-flash-latest"></label>
+  <label class="note">Modelo<input id="model" value="gemini-flash-latest" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
   <p class="note">A chave fica salva só neste navegador (localStorage) e é enviada apenas ao Google. Crie uma grátis em aistudio.google.com/apikey. Se der erro de modelo, troque o nome do modelo acima.</p>
 </div>
 
@@ -88,7 +88,8 @@ async function load(f){
 async function ask(prompt,{search=false,max=4000}={}){
   const key=$("key").value.trim();
   if(!key)throw new Error("Informe a chave da API.");
-  const model=$("model").value.trim()||"gemini-flash-latest";
+  let model=$("model").value.trim().toLowerCase();
+  if(!/^gemini-[a-z0-9.\-]+$/.test(model)){model="gemini-flash-latest";$("model").value=model}
   const body={contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:12000}};
   if(search)body.tools=[{google_search:{}}];
   const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":key},body:JSON.stringify(body)});
