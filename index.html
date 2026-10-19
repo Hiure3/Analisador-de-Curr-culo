@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analisador de Currículo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1a1d23;--mu:#5d6572;--bd:#dde1e7;--ac:#1f5eff;--ok:#16794a;--wn:#a15c00;--no:#b3261e;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1d2026;--tx:#eceef2;--mu:#9aa3b0;--bd:#2d323b;--ac:#6b93ff;--ok:#4cc38a;--wn:#e0a24a;--no:#ff8a80;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:880px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.6rem;margin:0 0 4px}h2{font-size:1.15rem;margin:14px 0 8px}
+.sub,.note{color:var(--mu)}.note{font-size:.88rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;margin-bottom:16px}
+.drop{border:2px dashed var(--bd);border-radius:12px;padding:24px;text-align:center;cursor:pointer}
+input,textarea,select{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:10px;font:inherit;margin-top:6px}
+textarea{min-height:90px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:600px){.row{grid-template-columns:1fr}}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;margin:6px 8px 0 0}
+button.sec{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+button:disabled{opacity:.5;cursor:default}
+.score{font-size:3rem;font-weight:800;line-height:1}
+.bar{height:10px;background:var(--bd);border-radius:6px;overflow:hidden;margin-top:10px}.bar i{display:block;height:100%;background:var(--ac)}
+.tbl{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:480px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mu);font-size:.85rem}
+.sim{color:var(--ok);font-weight:700}.parcial{color:var(--wn);font-weight:700}.nao{color:var(--no);font-weight:700}
+.job{border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px}
+a{color:var(--ac);font-weight:600;text-decoration:none;margin-right:12px}
+#err{color:var(--no)}
+#print{display:none}
+@media print{body *{display:none!important}#print,#print *{display:revert!important}#print{display:block!important;color:#000;background:#fff;font:12pt/1.4 Georgia,serif}#print h1{font-size:20pt}#print h2{font-size:13pt;border-bottom:1px solid #000}}
+</style>
+</head>
+<body>
+<main>
+<h1>Analisador de Currículo</h1>
+<p class="sub">Pesquisa na internet o que as empresas exigem, avalia seu currículo, encontra vagas e refaz o currículo para você.</p>
+
+<div class="card">
+  <strong>1. Chave da API Gemini (Google)</strong>
+  <input id="key" type="password" placeholder="AIza..." autocomplete="off">
+  <label class="note">Modelo<input id="model" value="gemini-flash-latest"></label>
+  <p class="note">A chave fica salva só neste navegador (localStorage) e é enviada apenas ao Google. Crie uma grátis em aistudio.google.com/apikey. Se der erro de modelo, troque o nome do modelo acima.</p>
+</div>
+
+<div class="card">
+  <strong>2. Currículo (PDF)</strong>
+  <div class="drop" id="drop" style="margin-top:8px">📄 <b>Escolher o PDF</b><br><span class="note" id="fname">ou arraste o arquivo para cá</span></div>
+  <input type="file" id="file" accept="application/pdf" hidden>
+  <details style="margin-top:10px"><summary class="note">Prefere colar o texto?</summary><textarea id="txt"></textarea></details>
+  <div class="row" style="margin-top:10px">
+    <label>Cargo desejado (opcional)<input id="cargo" placeholder="Ex.: Analista de Marketing"></label>
+    <label>Cidade / remoto (opcional)<input id="local" placeholder="Ex.: Natal, RN ou remoto"></label>
+  </div>
+  <button id="go">Analisar e buscar vagas</button>
+  <p id="err"></p><p class="note" id="st"></p>
+</div>
+
+<div id="out"></div>
+<div id="print"></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let cv="", analise=null;
+
+$("key").value=localStorage.getItem("gk")||"";
+$("key").onchange=()=>localStorage.setItem("gk",$("key").value.trim());
+$("drop").onclick=()=>$("file").click();
+$("drop").ondragover=e=>e.preventDefault();
+$("drop").ondrop=e=>{e.preventDefault();e.dataTransfer.files[0]&&load(e.dataTransfer.files[0])};
+$("file").onchange=e=>e.target.files[0]&&load(e.target.files[0]);
+
+async function load(f){
+  $("err").textContent="";$("fname").textContent="Lendo "+f.name+"…";
+  try{
+    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf=await pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise;let t="";
+    for(let i=1;i<=pdf.numPages;i++){const c=await(await pdf.getPage(i)).getTextContent();t+=c.items.map(x=>x.str).join(" ")+"\n"}
+    cv=t;$("fname").textContent=f.name+" ("+pdf.numPages+" pág.)";
+    if(t.trim().length<80)$("err").textContent="Sem texto extraível (PDF escaneado?). Cole o texto na caixa.";
+  }catch(e){$("err").textContent="Não consegui ler o PDF. Cole o texto na caixa."}
+}
+
+async function ask(prompt,{search=false,max=4000}={}){
+  const key=$("key").value.trim();
+  if(!key)throw new Error("Informe a chave da API.");
+  const model=$("model").value.trim()||"gemini-flash-latest";
+  const body={contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:12000}};
+  if(search)body.tools=[{google_search:{}}];
+  const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":key},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error?.message||("Erro "+r.status));
+  const t=(d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+  if(!t)throw new Error("Resposta vazia (possível bloqueio de conteúdo).");
+  return t;
+}
+const getJson=t=>JSON.parse(t.slice(t.indexOf("{"),t.lastIndexOf("}")+1));
+const textoCV=()=>(cv.trim().length>=80?cv:$("txt").value).trim().slice(0,24000);
+
+$("go").onclick=async()=>{
+  const t=textoCV();$("err").textContent="";
+  if(t.length<80){$("err").textContent="Envie o PDF ou cole o texto do currículo.";return}
+  $("go").disabled=true;$("out").innerHTML="";$("st").textContent="Pesquisando requisitos e vagas na internet… pode levar cerca de 1 minuto.";
+  try{
+    const p=`Você é recrutador sênior no Brasil. Hoje é ${new Date().toLocaleDateString("pt-BR")}.
+1) Identifique o perfil do candidato no currículo. Cargo desejado: ${$("cargo").value||"deduza do currículo"}. Local: ${$("local").value||"Brasil"}.
+2) Use a busca na web para ver o que empresas pedem hoje em vagas reais desse cargo e para achar vagas abertas atuais.
+3) Compare com o currículo.
+Responda SOMENTE JSON válido, sem markdown:
+{"perfil":{"cargo_alvo":"","senioridade":"","resumo":""},
+"o_que_empresas_buscam":"parágrafo baseado nas vagas pesquisadas",
+"requisitos":[{"requisito":"","frequencia":"alta|media|baixa","no_curriculo":"sim|parcial|nao"}],
+"nota":0,"como_avaliamos":"parágrafo explicando a avaliação e a nota",
+"pontos_fortes":[""],"lacunas":[""],"melhorias":[""],
+"vagas":[{"titulo":"","empresa":"","local":"","link":"URL realmente encontrada na pesquisa","porque":"aderência ao currículo"}],
+"buscas":[{"titulo":"","consulta":"termos curtos"}]}
+Use 8 a 12 requisitos, até 6 vagas (só com link real) e 3 a 5 buscas. Não invente experiências do candidato.
+
+CURRÍCULO:
+${t}`;
+    analise=getJson(await ask(p,{search:true,max:6000}));
+    render(analise);$("st").textContent="";
+  }catch(e){$("err").textContent="Falha: "+e.message;$("st").textContent=""}
+  $("go").disabled=false;
+};
+
+const tag=v=>{v=String(v||"").toLowerCase();const k=v[0]==="s"?"sim":v[0]==="p"?"parcial":"nao";return `<span class="${k}">${{sim:"Sim",parcial:"Parcial",nao:"Não"}[k]}</span>`};
+const ul=a=>"<ul>"+(a||[]).map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul>";
+const safeUrl=u=>/^https?:\/\//i.test(u||"")?u:null;
+
+function render(r){
+  const p=r.perfil||{},n=Math.max(0,Math.min(100,+r.nota||0)),q=encodeURIComponent;
+  const vagas=(r.vagas||[]).filter(v=>safeUrl(v.link)).map(v=>`<div class="job"><b>${esc(v.titulo)}</b> · ${esc(v.empresa)} · ${esc(v.local)}<br><span class="note">${esc(v.porque)}</span><br><a target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(v.link))}">Ver vaga</a></div>`).join("");
+  const buscas=(r.buscas||[]).map(b=>{const k=q(b.consulta||b.titulo);return `<div class="job"><b>${esc(b.titulo)}</b><br><a target="_blank" rel="noopener noreferrer" href="https://www.linkedin.com/jobs/search/?keywords=${k}">LinkedIn</a><a target="_blank" rel="noopener noreferrer" href="https://br.indeed.com/jobs?q=${k}">Indeed</a><a target="_blank" rel="noopener noreferrer" href="https://portal.gupy.io/job-search/term=${k}">Gupy</a><a target="_blank" rel="noopener noreferrer" href="https://www.google.com/search?q=${q((b.consulta||b.titulo)+" vagas")}&ibp=htl;jobs">Google Vagas</a></div>`}).join("");
+  const rows=(r.requisitos||[]).map(x=>`<tr><td>${esc(x.requisito)}</td><td>${esc(x.frequencia)}</td><td>${tag(x.no_curriculo)}</td></tr>`).join("");
+  const opts=`<option value="">Perfil geral (cargo-alvo)</option>`+(r.vagas||[]).map((v,i)=>`<option value="${i}">${esc(v.titulo)} — ${esc(v.empresa)}</option>`).join("");
+  $("out").innerHTML=`
+  <div class="card"><h2>Seu perfil</h2><p><b>${esc(p.cargo_alvo)}</b> · ${esc(p.senioridade)}</p><p>${esc(p.resumo)}</p></div>
+  <div class="card"><h2>O que as empresas buscam</h2><p>${esc(r.o_que_empresas_buscam)}</p><div class="tbl"><table><tr><th>Requisito</th><th>Frequência</th><th>No seu currículo</th></tr>${rows}</table></div></div>
+  <div class="card"><h2>Como avaliamos seu currículo</h2><div class="score">${n}<span class="note">/100</span></div><div class="bar"><i style="width:${n}%"></i></div>
+  <p>${esc(r.como_avaliamos)}</p><h2>Pontos fortes</h2>${ul(r.pontos_fortes)}<h2>Lacunas</h2>${ul(r.lacunas)}<h2>Melhorias</h2>${ul(r.melhorias)}</div>
+  <div class="card"><h2>Vagas encontradas</h2>${vagas||'<p class="note">Nenhuma vaga com link verificável nesta pesquisa. Use as buscas abaixo.</p>'}<h2>Buscas prontas</h2>${buscas}</div>
+  <div class="card"><h2>Refazer o currículo</h2><p class="note">Gera uma nova versão com base na análise, sem inventar experiências. Campos que faltam aparecem como [PREENCHER].</p>
+  <label>Adaptar para<select id="alvo">${opts}</select></label>
+  <button id="rw">Refazer currículo</button><span class="note" id="rst"></span>
+  <div id="res" style="display:none"><textarea id="cvnovo" style="min-height:420px;font-family:ui-monospace,monospace;font-size:.9rem"></textarea>
+  <button class="sec" id="cp">Copiar</button><button class="sec" id="dl">Baixar .md</button><button class="sec" id="pr">Salvar como PDF</button></div></div>`;
+  $("rw").onclick=refazer;
+  $("out").scrollIntoView({behavior:"smooth"});
+}
+
+async function refazer(){
+  $("rw").disabled=true;$("rst").textContent="Reescrevendo…";
+  try{
+    const i=$("alvo").value,v=i===""?null:analise.vagas[+i];
+    const p=`Reescreva o currículo abaixo em português do Brasil, em Markdown, otimizado para triagem automática (ATS) e leitura humana.
+Alvo: ${v?`vaga "${v.titulo}" na ${v.empresa}`:`cargo ${analise.perfil?.cargo_alvo||""}`}.
+Regras: use APENAS fatos presentes no currículo original; NÃO invente cargos, datas, números, cursos ou ferramentas. Quando faltar dado importante, escreva [PREENCHER: o que falta]. Estrutura: # Nome, contato, ## Resumo profissional (3 a 4 linhas), ## Competências (alinhadas aos requisitos de alta frequência que o candidato realmente tem), ## Experiência (bullets com verbo de ação e resultado quando houver), ## Formação, ## Cursos e idiomas. Corrija as lacunas e melhorias apontadas na análise quando possível sem inventar. Responda só com o currículo.
+
+ANÁLISE:
+${JSON.stringify({requisitos:analise.requisitos,lacunas:analise.lacunas,melhorias:analise.melhorias})}
+
+CURRÍCULO ORIGINAL:
+${textoCV()}`;
+    $("cvnovo").value=(await ask(p,{max:4000})).trim();
+    $("res").style.display="block";$("rst").textContent="";
+    $("cp").onclick=()=>navigator.clipboard.writeText($("cvnovo").value);
+    $("dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([$("cvnovo").value],{type:"text/markdown"}));a.download="curriculo-novo.md";a.click()};
+    $("pr").onclick=()=>{$("print").innerHTML=md($("cvnovo").value);window.print()};
+  }catch(e){$("rst").textContent="Falha: "+e.message}
+  $("rw").disabled=false;
+}
+
+function md(s){
+  let h=esc(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").split("\n"),o="",l=false;
+  for(const x of h){
+    const b=x.match(/^\s*[-*]\s+(.*)/);
+    if(b){if(!l){o+="<ul>";l=true}o+="<li>"+b[1]+"</li>";continue}
+    if(l){o+="</ul>";l=false}
+    if(/^##\s/.test(x))o+="<h2>"+x.slice(3)+"</h2>";
+    else if(/^#\s/.test(x))o+="<h1>"+x.slice(2)+"</h1>";
+    else if(x.trim())o+="<p>"+x+"</p>";
+  }
+  return o+(l?"</ul>":"");
+}
+</script>
+</body>
+</html>
